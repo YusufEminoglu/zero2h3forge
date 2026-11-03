@@ -5,6 +5,13 @@ All notable changes to **02H3Forge - H3 Hexagonal Risk, Vulnerability and Suitab
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-11-03
+
+### Changed
+- Aligned `metadata.txt` and documentation with Geophilo standards (`author=Geophilo`, structured workflow summary, and `geophilo.com` links).
+- Updated `icons/icon.png` to a 512x512 3D isometric tactile studio icon with transparent background and zero margin (`bbox = (0, 0, 512, 512)`).
+- Replaced unguarded polygon ring extraction in raster zonal sampling with `geometry.vertices()` for clean multi-part support.
+
 ## [0.1.0] - 2026-11-03
 
 ### Added

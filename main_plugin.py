@@ -40,7 +40,7 @@ class O2H3ForgePlugin:
         rate_action.setToolTip("Submit verified rating & feedback on GeoPhilo")
         rate_action.triggered.connect(
             lambda: QDesktopServices.openUrl(
-                QUrl("https://geophilo.com/feedback/?plugin=zero2h3forge&v=0.1.0")
+                QUrl("https://geophilo.com/feedback/?plugin=zero2h3forge&v=0.1.1")
             )
         )
         self.iface.addPluginToMenu(MENU_NAME, rate_action)

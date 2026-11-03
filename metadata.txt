@@ -4,7 +4,7 @@ qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 supportsQt6=True
 description=Uber H3 hexagonal grid-based multi-criteria decision analysis (MCDA), graduated buffer scoring, spatial data fusion, and composite risk, hazard, vulnerability, susceptibility, and suitability mapping studio.
-version=0.1.0
+version=0.1.1
 author=Geophilo
 email=yusuf.eminoglu@deu.edu.tr
 
@@ -18,7 +18,7 @@ about=02H3Forge is a right-docked Uber H3 hexagonal spatial synthesis and multi-
 
 tracker=https://github.com/YusufEminoglu/zero2h3forge/issues
 repository=https://github.com/YusufEminoglu/zero2h3forge
-homepage=https://geophilo.com/zero2h3forge/
+homepage=https://geophilo.com/
 
 category=Vector
 tags=h3,hexagon,dggs,mcda,risk,vulnerability,hazard,susceptibility,suitability,wlc,ahp,critic,topsis,vikor,buffer,overlay,urban planning,geophilo
@@ -31,4 +31,5 @@ hasProcessingProvider=no
 license=GPL-3.0-or-later
 
 changelog=
+    0.1.1 - Geophilo metadata alignment, 3D tactile full-bleed studio icon with transparent background and zero margin, and multi-part geometry guard in raster sampling.
     0.1.0 - Initial release of 02H3Forge: right-docked Uber H3 hexagonal grid generator, graduated multi-ring buffer scorer, vector/raster spatial aggregator, 0-100 Benefit/Cost normalizer, auto-balancing weight sliders, AHP/CRITIC/Entropy/PCA weighting, and WLC/OWA/TOPSIS/VIKOR composite risk and suitability mapping.
