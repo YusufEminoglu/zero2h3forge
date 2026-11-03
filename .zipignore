@@ -1,0 +1,4 @@
+# Repo-only content excluded from the QGIS Hub zip
+docs
+.github
+tests
