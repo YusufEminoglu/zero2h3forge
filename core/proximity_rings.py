@@ -7,7 +7,6 @@ streams, highways) and scoring each H3 hexagon by its shortest planar distance.
 """
 from __future__ import annotations
 
-from contextlib import suppress
 from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
@@ -124,13 +123,7 @@ def apply_multiring_buffer_to_h3(
     -------
     (dist_field_name, ring_field_name, excluded_count)
     """
-    from qgis.core import (
-        QgsCoordinateTransform,
-        QgsFeature,
-        QgsGeometry,
-        QgsProject,
-        QgsSpatialIndex,
-    )
+    from .compute import distance_array, snapshot_hex_layer, snapshot_vector_source
 
     if h3_layer is None or not h3_layer.isValid():
         raise ValueError("A valid H3 hexagon layer is required.")
@@ -144,92 +137,28 @@ def apply_multiring_buffer_to_h3(
     dist_field = sanitize_field_slug(criterion_name, prefix="dist")
     ring_field = sanitize_field_slug(criterion_name, prefix="ring")
 
+    snap = snapshot_hex_layer(h3_layer)
+    src = snapshot_vector_source(source_layer, h3_layer.crs())
+    if not src.geoms:
+        raise ValueError(f"Source layer '{source_layer.name()}' contains no valid geometries.")
+    if measure_from == "centroid":
+        dists = distance_array([g.centroid() for g in snap.geoms], src.geoms)
+    else:
+        dists = distance_array(snap.geoms, src.geoms)
+
+    scores_arr, excl_arr = evaluate_graduated_rings(dists, validated_rings, outside_score=outside_score)
+    prev_mask = snap.numeric.get("constraint_mask", np.ones(snap.size))
+
     idx_dist = ensure_layer_field(h3_layer, dist_field, kind="double")
     idx_ring = ensure_layer_field(h3_layer, ring_field, kind="double")
     idx_mask = ensure_layer_field(h3_layer, "constraint_mask", kind="int")
-
-    target_crs = h3_layer.crs()
-    tr = None
-    if source_layer.crs() != target_crs:
-        tr = QgsCoordinateTransform(source_layer.crs(), target_crs, QgsProject.instance())
-
-    spatial_index = QgsSpatialIndex()
-    src_geoms: Dict[int, QgsGeometry] = {}
-    for s_feat in source_layer.getFeatures():
-        g = s_feat.geometry()
-        if g is None or g.isEmpty():
-            continue
-        g_copy = QgsGeometry(g)
-        if tr is not None:
-            with suppress(Exception):
-                g_copy.transform(tr)
-        fid = int(s_feat.id())
-        src_geoms[fid] = g_copy
-        f_idx = QgsFeature(fid)
-        f_idx.setGeometry(g_copy)
-        spatial_index.addFeature(f_idx)
-
-    if not src_geoms:
-        raise ValueError(f"Source layer '{source_layer.name()}' contains no valid geometries.")
-
-    fids: List[int] = []
-    dists: List[float] = []
-    curr_masks: List[int] = []
-
-    for h_feat in h3_layer.getFeatures():
-        h_geom = h_feat.geometry()
-        if h_geom is None or h_geom.isEmpty():
-            continue
-        fids.append(int(h_feat.id()))
-        m_val = h_feat.attribute(idx_mask)
-        curr_masks.append(0 if (m_val is not None and int(m_val) == 0) else 1)
-
-        ref_geom = h_geom.centroid() if measure_from == "centroid" else h_geom
-        pt_center = h_geom.centroid().asPoint()
-        candidate_ids = spatial_index.nearestNeighbor(pt_center, 8)
-        if not candidate_ids:
-            candidate_ids = list(src_geoms.keys())
-
-        min_d = float("inf")
-        for cid in candidate_ids:
-            sg = src_geoms.get(cid)
-            if sg is not None:
-                d = float(ref_geom.distance(sg))
-                if d < min_d:
-                    min_d = d
-        # If polygon/line crosses the hex but nearestNeighbor missed a long segment, verify bbox
-        if min_d > 0.0:
-            bbox_hits = spatial_index.intersects(h_geom.boundingBox())
-            for cid in bbox_hits:
-                sg = src_geoms.get(cid)
-                if sg is not None:
-                    d = float(ref_geom.distance(sg))
-                    if d < min_d:
-                        min_d = d
-                        if min_d == 0.0:
-                            break
-        dists.append(min_d)
-
-    scores_arr, excl_arr = evaluate_graduated_rings(
-        dists,
-        validated_rings,
-        outside_score=outside_score,
-    )
-
     attr_updates: Dict[int, Dict[int, object]] = {}
-    excluded_count = 0
-    for i, fid in enumerate(fids):
-        d_val = round(float(dists[i]), 2) if np.isfinite(dists[i]) else -1.0
-        s_val = round(float(scores_arr[i]), 2)
-        new_mask = 0 if (excl_arr[i] or curr_masks[i] == 0) else 1
-        if excl_arr[i]:
-            excluded_count += 1
+    for i, fid in enumerate(snap.fids):
         attr_updates[fid] = {
-            idx_dist: d_val,
-            idx_ring: s_val,
-            idx_mask: new_mask,
+            idx_dist: round(float(dists[i]), 2) if np.isfinite(dists[i]) else -1.0,
+            idx_ring: round(float(scores_arr[i]), 2),
+            idx_mask: 0 if (excl_arr[i] or prev_mask[i] == 0) else 1,
         }
-
     if attr_updates:
         h3_layer.dataProvider().changeAttributeValues(attr_updates)
-    return dist_field, ring_field, excluded_count
+    return dist_field, ring_field, int(np.sum(excl_arr))

@@ -21,6 +21,10 @@ except ImportError:
 
 
 DEFAULT_H3_RESOLUTION: int = 10
+# Above this many candidate hexagons the native H3 path is skipped and the
+# metric fallback coarsens its spacing to stay responsive.
+MAX_NATIVE_H3_CELLS: int = 65_000
+MAX_METRIC_CELLS: int = 60_000
 
 # Canonical Uber H3 resolution table (Resolutions 6 through 12).
 H3_RESOLUTION_SPECS: Dict[int, Dict[str, object]] = {
@@ -96,6 +100,23 @@ def circumradius_for_resolution(resolution: int) -> float:
     return math.sqrt((2.0 * area_m2) / (3.0 * math.sqrt(3.0)))
 
 
+def estimate_hex_count(width_m: float, height_m: float, resolution: int) -> int:
+    """Approximate number of hexagons covering a ``width_m`` x ``height_m`` box.
+
+    Adds one ring of edge cells around the box, which is what both the native
+    H3 polyfill (buffered bbox) and the metric fallback produce in practice.
+    """
+    w = max(0.0, float(width_m))
+    h = max(0.0, float(height_m))
+    if w <= 0.0 or h <= 0.0:
+        return 0
+    spec = get_resolution_spec(resolution)
+    radius = circumradius_for_resolution(resolution)
+    pad = 2.0 * radius
+    area = (w + pad) * (h + pad)
+    return int(math.ceil(area / float(spec["area_m2"])))
+
+
 def sanitize_field_slug(name: str, prefix: str = "raw", max_len: int = 28) -> str:
     """Build a clean ASCII attribute column name with the given prefix."""
     ascii_map = str.maketrans({
@@ -105,7 +126,9 @@ def sanitize_field_slug(name: str, prefix: str = "raw", max_len: int = 28) -> st
     })
     cleaned = (name or "crit").translate(ascii_map).lower()
     cleaned = re.sub(r"[^a-z0-9]+", "_", cleaned).strip("_")
-    for pfx in ("raw_", "norm_", "dist_", "ring_"):
+    # ``dist_`` is deliberately kept: normalizing ``dist_x`` must produce
+    # ``norm_dist_x`` and never overwrite the ring-scored ``norm_x`` criterion.
+    for pfx in ("raw_", "norm_", "ring_"):
         if cleaned.startswith(pfx):
             cleaned = cleaned[len(pfx):]
     if not cleaned:
@@ -120,7 +143,7 @@ def generate_metric_hex_cells(
     xmax: float,
     ymax: float,
     resolution: int = DEFAULT_H3_RESOLUTION,
-    max_cells: int = 60_000,
+    max_cells: int = MAX_METRIC_CELLS,
 ) -> List[Tuple[str, List[Tuple[float, float]]]]:
     """Pure-Python regular hexagonal tessellation matching exact H3 metric area.
 
@@ -325,6 +348,71 @@ def ensure_layer_field(layer, name: str, kind: str = "double", length: int = 64)
     return layer.fields().indexFromName(name)
 
 
+def choose_metric_epsg(lon: float, lat: float) -> int:
+    """Pick a conformal metric CRS that keeps scale error small at (lon, lat).
+
+    - Inside Türkiye: the TUREF 3-degree Transverse Mercator zone whose central
+      meridian is nearest (EPSG:5253 TM27 ... EPSG:5259 TM45).
+    - Elsewhere: the WGS 84 / UTM zone of the location (EPSG:326xx north,
+      EPSG:327xx south); polar caps fall back to UPS (EPSG:32661 / 32761).
+
+    Web Mercator (EPSG:3857) is never used: its scale error is +30% at 40° and
+    +100% at 60° latitude, which would corrupt distances, buffers and areas.
+    """
+    lon = ((float(lon) + 180.0) % 360.0) - 180.0
+    lat = max(-90.0, min(90.0, float(lat)))
+    if 25.5 <= lon <= 45.5 and 35.5 <= lat <= 42.5:
+        cm = min(45, max(27, 27 + 3 * int(round((lon - 27.0) / 3.0))))
+        return 5253 + (cm - 27) // 3
+    if lat >= 84.0:
+        return 32661
+    if lat <= -80.0:
+        return 32761
+    zone = min(60, int((lon + 180.0) // 6.0) + 1)
+    return (32600 if lat >= 0.0 else 32700) + zone
+
+
+def _is_metric_projected(crs) -> bool:
+    if crs is None or not crs.isValid() or crs.isGeographic():
+        return False
+    from qgis.core import Qgis, QgsUnitTypes
+
+    unit_enum = getattr(Qgis, "DistanceUnit", None)  # QGIS 3.30+
+    meters = unit_enum.Meters if unit_enum is not None else QgsUnitTypes.DistanceMeters
+    if crs.mapUnits() != meters:
+        return False
+    # Web Mercator variants are metric in name only.
+    return crs.authid() not in ("EPSG:3857", "EPSG:900913", "EPSG:3395", "EPSG:102100")
+
+
+def resolve_metric_work_crs(extent_rect, target_crs):
+    """Return ``(work_crs, extent_in_work_crs)`` in a true-scale metric CRS.
+
+    Projected metre-based inputs are kept as they are. Geographic, non-metre
+    or Web-Mercator inputs are moved to :func:`choose_metric_epsg` for the
+    extent centre.
+    """
+    from qgis.core import (
+        QgsCoordinateReferenceSystem,
+        QgsCoordinateTransform,
+        QgsPointXY,
+        QgsProject,
+    )
+
+    if target_crs is None or not target_crs.isValid():
+        target_crs = QgsCoordinateReferenceSystem("EPSG:4326")
+    if _is_metric_projected(target_crs):
+        return target_crs, extent_rect
+    wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
+    centre = QgsPointXY(extent_rect.center())
+    if target_crs != wgs84:
+        to_wgs = QgsCoordinateTransform(target_crs, wgs84, QgsProject.instance())
+        centre = to_wgs.transform(centre)
+    work_crs = QgsCoordinateReferenceSystem(f"EPSG:{choose_metric_epsg(centre.x(), centre.y())}")
+    tr = QgsCoordinateTransform(target_crs, work_crs, QgsProject.instance())
+    return work_crs, tr.transformBoundingBox(extent_rect)
+
+
 def build_h3_grid_layer(
     extent_rect,
     target_crs,
@@ -341,7 +429,9 @@ def build_h3_grid_layer(
     extent_rect : QgsRectangle
         Bounding box in ``target_crs``.
     target_crs : QgsCoordinateReferenceSystem
-        Target coordinate reference system (projected metric CRS recommended).
+        CRS of ``extent_rect``. Metre-based projected CRSs are used as-is; any
+        other CRS is replaced by a local true-scale CRS (see
+        :func:`choose_metric_epsg`).
     resolution : int
         H3 resolution (6..12), default 10 (~1.50 ha).
     boundary_layer : QgsVectorLayer, optional
@@ -368,20 +458,8 @@ def build_h3_grid_layer(
     res = max(6, min(12, int(resolution)))
     spec = get_resolution_spec(res)
 
-    if target_crs is None or not target_crs.isValid():
-        target_crs = QgsCoordinateReferenceSystem("EPSG:5253")
-
-    # If target_crs is geographic (degrees), project to metric CRS (EPSG:5253 for Turkey or EPSG:3857)
-    work_crs = target_crs
-    if work_crs.isGeographic():
-        cx = 0.5 * (extent_rect.xMinimum() + extent_rect.xMaximum())
-        cy = 0.5 * (extent_rect.yMinimum() + extent_rect.yMaximum())
-        if 25.0 <= cx <= 45.0 and 35.0 <= cy <= 43.0:
-            work_crs = QgsCoordinateReferenceSystem("EPSG:5253")
-        else:
-            work_crs = QgsCoordinateReferenceSystem("EPSG:3857")
-        tr_to_work = QgsCoordinateTransform(target_crs, work_crs, QgsProject.instance())
-        extent_rect = tr_to_work.transformBoundingBox(extent_rect)
+    # Move degree / non-metre / Web-Mercator inputs to a local true-scale CRS
+    work_crs, extent_rect = resolve_metric_work_crs(extent_rect, target_crs)
 
     # Prepare optional boundary union geometry in work_crs
     boundary_geom = None
@@ -410,6 +488,7 @@ def build_h3_grid_layer(
 
     # Build candidate hexagons in work_crs
     hex_candidates: List[Tuple[str, object]] = []
+    engine = "metric-fallback"
     if prefer_native_h3 and HAS_H3_LIB:
         wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
         tr_to_wgs = QgsCoordinateTransform(work_crs, wgs84, QgsProject.instance())
@@ -423,7 +502,8 @@ def build_h3_grid_layer(
                 wgs_box.xMaximum(),
                 res,
             )
-            if len(raw_h3) <= 65_000:
+            if len(raw_h3) <= MAX_NATIVE_H3_CELLS:
+                engine = "native-h3"
                 for cid, ring_lonlat in raw_h3:
                     pts_work = [
                         tr_from_wgs.transform(QgsPointXY(lon, lat))
@@ -434,6 +514,7 @@ def build_h3_grid_layer(
                         hex_candidates.append((cid, poly_geom))
 
     if not hex_candidates:
+        engine = "metric-fallback"
         metric_cells = generate_metric_hex_cells(
             extent_rect.xMinimum(),
             extent_rect.yMinimum(),
@@ -486,4 +567,18 @@ def build_h3_grid_layer(
     if features_to_add:
         dp.addFeatures(features_to_add)
     mem_layer.updateExtents()
+
+    # Provenance so the UI can tell the analyst exactly what was built.
+    mean_area = (
+        sum(float(f.attribute("area_m2")) for f in features_to_add) / len(features_to_add)
+        if features_to_add else 0.0
+    )
+    mem_layer.setCustomProperty("h3forge/engine", engine)
+    mem_layer.setCustomProperty("h3forge/resolution", res)
+    mem_layer.setCustomProperty("h3forge/mean_area_m2", round(mean_area, 2))
+    coarsened = bool(
+        engine == "metric-fallback"
+        and mean_area > 1.05 * float(spec["area_m2"])
+    )
+    mem_layer.setCustomProperty("h3forge/coarsened", coarsened)
     return mem_layer

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.3.0"
 
 
 def classFactory(iface: Any):

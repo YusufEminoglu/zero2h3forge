@@ -34,7 +34,6 @@ from zero2h3forge.core.mcda_composer import (  # noqa: E402
     compute_montecarlo_stability,
     critic_weights_pct,
     entropy_weights_pct,
-    equal_weights_pct,
     pca_weights_pct,
     rebalance_coupled_weights,
 )

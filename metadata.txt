@@ -4,16 +4,16 @@ qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 supportsQt6=True
 description=Uber H3 hexagonal grid-based multi-criteria decision analysis (MCDA), graduated buffer scoring, spatial data fusion, and composite risk, hazard, vulnerability, susceptibility, and suitability mapping studio.
-version=0.1.1
+version=0.3.0
 author=Geophilo
 email=yusuf.eminoglu@deu.edu.tr
 
-about=02H3Forge is a right-docked Uber H3 hexagonal spatial synthesis and multi-criteria overlay studio for QGIS. It generates H3 hexagonal tessellations across any study area, scores proximity rings, aggregates heterogeneous vector and raster layers into H3 cells, normalizes criteria onto a 0-100 scale with Benefit and Cost polarity, and combines them into composite vulnerability, hazard, risk, susceptibility, and suitability maps.
-    STAGE 0 - H3 GRID AND MULTI-RING BUFFERS: Generate Uber H3 hexagonal grids across a study area polygon, layer extent, or map canvas (Resolutions 7 to 12; defaults to H3 Resolution 10 at approximately 1.50 hectares, down to H3 Resolution 11 at approximately 25 meter edge length). Construct graduated multi-ring proximity buffers (such as 0-100m, 100-250m, 250-500m around power lines, faults, streams, or roads) to assign critical threshold scores (0-100) and optional hard exclusion masks (constraint_mask = 0).
-    STAGE 1 - MULTI-SOURCE SPATIAL AGGREGATION: Aggregate Points (count, density per hectare, sum, mean, min, max, median, nearest distance), Lines (total length, density m/ha, length-weighted mean, nearest distance), Polygons (area share, area-weighted mean, area-weighted sum, intersecting count), and Rasters (zonal mean, median, min, max, standard deviation) directly into H3 hexagon attributes.
-    STAGE 2 - CRITERION NORMALIZATION (0 TO 100): Transform raw H3 columns onto a unified 0-100 scale with explicit Benefit (+) and Cost (-) polarity using Min-Max Linear, Robust Percentile (P2-P98), Fuzzy Linear, Fuzzy Sigmoid, Fuzzy Gaussian, or Direct 0-100 Multi-Ring Scores.
-    STAGE 3 - COUPLED WEIGHTS AND OVERLAY: Adjust interactive weight sliders that automatically rebalance unlocked criteria so the total weight always equals 100, or compute weights in one click with Equal (1/N), CRITIC, Shannon Entropy, PCA, or an interactive AHP Pairwise Matrix (CR <= 0.10). Combine criteria with WLC, OWA, TOPSIS, or VIKOR, with optional H3 1-ring spatial contagion smoothing.
-    STAGE 4 - EXPLAINABILITY, UNCERTAINTY AND REPORTING: Inspect each hexagon's primary local driver (top_driver and driver_share), run Monte Carlo weight perturbation (mc_std and rob_score), apply 5-class graduated thematic symbology, and export CSV tables and standalone HTML executive reports.
+about=02H3Forge turns heterogeneous vector and raster data into explainable risk, vulnerability, hazard, susceptibility and land-suitability maps on the Uber H3 hexagonal grid. An analysis is one reproducible model of criteria, groups, weights and constraints, computed in the background with progress and cancel.
+    1 STUDY AREA: Generate H3 grids (resolutions 6 to 12, native h3 index when installed) for a boundary, layer extent or the map canvas, always in a true-scale metric CRS (local UTM zone, or the nearest TUREF 3 degree zone in Turkiye), with a live cell-count estimate and GeoPackage persistence.
+    2 CRITERIA: Build a criterion library. Each criterion has a source (vector aggregation of points, lines or polygons; exact raster zonal statistics; distance to features; or an existing field), a value function to 0-100 (linear, robust P2-P98, thresholds, sigmoid, Gaussian optimum or graduated distance rings) with a live curve preview, and a group. Hard constraints are separate rules: distance to features, inside or outside polygons, or attribute rules.
+    3 WEIGHTS: Single index, Risk = Hazard x Exposure x Vulnerability, or suitability group structures. Coupled weight sliders always sum to 100, with AHP (CR at most 0.10), CRITIC, Shannon entropy and PCA. Each group uses WLC, weighted OWA with an adjustable risk attitude, TOPSIS or VIKOR; groups combine by weighted sum or weighted geometric mean.
+    4 RESULTS: Five-class maps (equal, quantile or Fisher-Jenks), group sub-indices, local explainability (top driver, top and limiting group), Monte Carlo uncertainty over group and criterion weights, Getis-Ord Gi* hotspots with k-ring neighbourhoods and false-discovery-rate control, Global Moran's I, one-at-a-time weight sensitivity, CSV export and an executive HTML report.
+    PROCESSING: Grid generation, model execution from a saved model file, flat overlay and hotspot analysis are available for the Graphical Modeler, batch runs and PyQGIS.
     Manual: https://geophilo.com/zero2h3forge/manual.html
 
 tracker=https://github.com/YusufEminoglu/zero2h3forge/issues
@@ -21,15 +21,17 @@ repository=https://github.com/YusufEminoglu/zero2h3forge
 homepage=https://geophilo.com/
 
 category=Vector
-tags=h3,hexagon,dggs,mcda,risk,vulnerability,hazard,susceptibility,suitability,wlc,ahp,critic,topsis,vikor,buffer,overlay,urban planning,geophilo
+tags=h3,hexagon,dggs,mcda,ahp,hotspot,getis-ord,moran,sensitivity,processing,risk,vulnerability,hazard,susceptibility,suitability,wlc,ahp,critic,topsis,vikor,buffer,overlay,urban planning,geophilo
 
 icon=icons/icon.png
 
 experimental=False
 deprecated=False
-hasProcessingProvider=no
+hasProcessingProvider=yes
 license=GPL-3.0-or-later
 
 changelog=
+    0.3.0 - Criterion-centric, hierarchical redesign: criterion library with sources and value functions (incl. graduated distance rings) and live curve preview; rule-based constraints; Risk = Hazard x Exposure x Vulnerability and suitability group structures with weighted-sum or geometric aggregation; group-level engines; hierarchical Monte Carlo, explainability and sensitivity; background execution with progress and cancel; raw-criterion caching; model files and a runmodel Processing algorithm; model structure in the HTML report.
+    0.2.0 - Auto-Forge one-click pipeline; Processing provider (H3 grid, composite overlay, hotspots); one-at-a-time weight sensitivity; Getis-Ord Gi* hotspots and Global Moran's I on H3 1-ring topology; JSON scenario save/load; live grid-size preview; richer HTML report with charts and run parameters; weights preserved across refreshes. Fixes: plugin unload no longer disconnects other plugins from project signals; TOPSIS/VIKOR ideals, contagion smoothing and XAI now respect hard exclusions; Monte Carlo uses the selected overlay engine; dist_ and ring_ criteria no longer overwrite the same norm_ column; invalid ring/normalization inputs show a message instead of crashing.
     0.1.1 - Geophilo metadata alignment, 3D tactile full-bleed studio icon with transparent background and zero margin, and multi-part geometry guard in raster sampling.
     0.1.0 - Initial release of 02H3Forge: right-docked Uber H3 hexagonal grid generator, graduated multi-ring buffer scorer, vector/raster spatial aggregator, 0-100 Benefit/Cost normalizer, auto-balancing weight sliders, AHP/CRITIC/Entropy/PCA weighting, and WLC/OWA/TOPSIS/VIKOR composite risk and suitability mapping.

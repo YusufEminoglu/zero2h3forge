@@ -1,0 +1,62 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core:
+    name: Core engines (pure Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.12"]
+    # Official images: hosted runners no longer ship Python 3.9, which QGIS
+    # 3.28 LTR on Windows still bundles.
+    container:
+      image: python:${{ matrix.python }}-slim
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m pip install numpy pyflakes
+      - name: Unit tests
+        run: python -m unittest tests.test_pure_mcda_h3 tests.test_spatial_stats_and_v02 tests.test_model_pipeline -v
+      - name: Lint
+        run: python -m pyflakes core ui h3forge_processing.py main_plugin.py ahp_dialog.py scripts tests
+
+  qgis:
+    name: QGIS ${{ matrix.qgis }} end-to-end (h3 ${{ matrix.h3 }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { qgis: release-3_34, h3: native }
+          - { qgis: release-3_34, h3: fallback }
+          - { qgis: latest, h3: native }
+    container:
+      image: qgis/qgis:${{ matrix.qgis }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install h3
+        if: matrix.h3 == 'native'
+        run: |
+          python3 -m pip --version || (apt-get update -qq && apt-get install -y -qq python3-pip)
+          python3 -m pip install h3 || python3 -m pip install --break-system-packages h3
+      - name: Model pipeline smoke test
+        run: python3 tests/smoke_pipeline.py
+      - name: Dock workflow smoke test
+        run: python3 tests/smoke_dock.py
+      - name: Processing provider smoke test
+        run: python3 tests/smoke_processing.py
+      - name: Build plugin archive
+        run: python3 scripts/build_plugin_zip.py
+      - uses: actions/upload-artifact@v4
+        if: matrix.qgis == 'release-3_34' && matrix.h3 == 'native'
+        with:
+          name: zero2h3forge-plugin
+          path: dist/*.zip
