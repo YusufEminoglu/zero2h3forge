@@ -7,6 +7,7 @@ plugin works across any QGIS 3.28+ / 4.x installation.
 """
 from __future__ import annotations
 
+import json
 import math
 import re
 from contextlib import suppress
@@ -190,6 +191,28 @@ def generate_metric_hex_cells(
             cell_id = f"h3r{int(resolution):02d}_{row:04x}_{col:04x}"
             cells.append((cell_id, ring))
     return cells
+
+
+def _h3_cells_for_wgs84_geometry(geojson: dict, resolution: int) -> Optional[List[str]]:
+    """H3 v4 cells whose centres fall inside a WGS84 (Multi)Polygon, holes included.
+
+    Returns ``None`` when the installed ``h3`` has no shape API (v3), so the
+    caller can fall back to the bounding-box path.
+    """
+    if not HAS_H3_LIB or _h3_lib is None:
+        return None
+    if not (hasattr(_h3_lib, "geo_to_h3shape") and hasattr(_h3_lib, "h3shape_to_cells")):
+        return None
+    shape = _h3_lib.geo_to_h3shape(geojson)
+    return sorted(str(c) for c in _h3_lib.h3shape_to_cells(shape, int(resolution)))
+
+
+def _h3_cell_ring_lonlat(cid: str) -> List[Tuple[float, float]]:
+    boundary_latlon = _h3_lib.cell_to_boundary(cid)
+    ring = [(float(lon), float(lat)) for lat, lon in boundary_latlon]
+    if ring and ring[0] != ring[-1]:
+        ring.append(ring[0])
+    return ring
 
 
 def _h3_cells_for_wgs84_bbox(
@@ -493,25 +516,44 @@ def build_h3_grid_layer(
         wgs84 = QgsCoordinateReferenceSystem("EPSG:4326")
         tr_to_wgs = QgsCoordinateTransform(work_crs, wgs84, QgsProject.instance())
         tr_from_wgs = QgsCoordinateTransform(wgs84, work_crs, QgsProject.instance())
-        with suppress(Exception):
-            wgs_box = tr_to_wgs.transformBoundingBox(extent_rect)
-            raw_h3 = _h3_cells_for_wgs84_bbox(
-                wgs_box.yMinimum(),
-                wgs_box.xMinimum(),
-                wgs_box.yMaximum(),
-                wgs_box.xMaximum(),
-                res,
-            )
-            if len(raw_h3) <= MAX_NATIVE_H3_CELLS:
-                engine = "native-h3"
-                for cid, ring_lonlat in raw_h3:
-                    pts_work = [
-                        tr_from_wgs.transform(QgsPointXY(lon, lat))
-                        for lon, lat in ring_lonlat
-                    ]
-                    poly_geom = QgsGeometry.fromPolygonXY([pts_work])
-                    if poly_geom is not None and not poly_geom.isEmpty():
-                        hex_candidates.append((cid, poly_geom))
+        raw_h3: Optional[List[Tuple[str, List[Tuple[float, float]]]]] = None
+        if boundary_geom is not None and not boundary_geom.isEmpty():
+            # Fill the boundary itself, not its bounding box: a scattered study
+            # area has a huge bbox but few cells. The buffer catches every cell
+            # that can intersect the boundary (centre within one circumradius);
+            # the exact coverage test below keeps the right ones.
+            with suppress(Exception):
+                edge = float(spec["edge_m"])
+                pad = 1.25 * edge if coverage_mode == "intersect" else 0.25 * edge
+                search = boundary_geom.buffer(pad, 4).simplify(0.05 * edge)
+                search.transform(tr_to_wgs)
+                ids = _h3_cells_for_wgs84_geometry(json.loads(search.asJson(7)), res)
+                if ids is not None:
+                    raw_h3 = [] if len(ids) > MAX_NATIVE_H3_CELLS else [(cid, None) for cid in ids]
+        if raw_h3 is None:
+            with suppress(Exception):
+                wgs_box = tr_to_wgs.transformBoundingBox(extent_rect)
+                raw_h3 = _h3_cells_for_wgs84_bbox(
+                    wgs_box.yMinimum(),
+                    wgs_box.xMinimum(),
+                    wgs_box.yMaximum(),
+                    wgs_box.xMaximum(),
+                    res,
+                )
+                if len(raw_h3) > MAX_NATIVE_H3_CELLS:
+                    raw_h3 = []
+        if raw_h3:
+            engine = "native-h3"
+            for cid, ring_lonlat in raw_h3:
+                if ring_lonlat is None:
+                    ring_lonlat = _h3_cell_ring_lonlat(cid)
+                pts_work = [
+                    tr_from_wgs.transform(QgsPointXY(lon, lat))
+                    for lon, lat in ring_lonlat
+                ]
+                poly_geom = QgsGeometry.fromPolygonXY([pts_work])
+                if poly_geom is not None and not poly_geom.isEmpty():
+                    hex_candidates.append((cid, poly_geom))
 
     if not hex_candidates:
         engine = "metric-fallback"
@@ -564,21 +606,26 @@ def build_h3_grid_layer(
         feat.setAttribute("constraint_mask", 1)
         features_to_add.append(feat)
 
-    if features_to_add:
-        dp.addFeatures(features_to_add)
-    mem_layer.updateExtents()
-
     # Provenance so the UI can tell the analyst exactly what was built.
     mean_area = (
         sum(float(f.attribute("area_m2")) for f in features_to_add) / len(features_to_add)
         if features_to_add else 0.0
     )
-    mem_layer.setCustomProperty("h3forge/engine", engine)
-    mem_layer.setCustomProperty("h3forge/resolution", res)
-    mem_layer.setCustomProperty("h3forge/mean_area_m2", round(mean_area, 2))
     coarsened = bool(
         engine == "metric-fallback"
         and mean_area > 1.05 * float(spec["area_m2"])
     )
+    if coarsened:
+        # Enlarged cells are not resolution-`res` cells; do not label them so.
+        for feat in features_to_add:
+            feat.setAttribute("h3_res", None)
+
+    if features_to_add:
+        dp.addFeatures(features_to_add)
+    mem_layer.updateExtents()
+
+    mem_layer.setCustomProperty("h3forge/engine", engine)
+    mem_layer.setCustomProperty("h3forge/resolution", res)
+    mem_layer.setCustomProperty("h3forge/mean_area_m2", round(mean_area, 2))
     mem_layer.setCustomProperty("h3forge/coarsened", coarsened)
     return mem_layer

@@ -200,7 +200,10 @@ class GenerateH3GridAlgorithm(_H3ForgeAlgorithm):
             "Tessellates a study-area polygon layer with Uber H3 hexagons (native h3 index when "
             "the h3 Python package is installed, otherwise an H3-scale metric grid). Output fields: "
             "h3_id, h3_res, area_m2, area_ha, constraint_mask. Geographic inputs are projected to a "
-            "true-scale metric CRS (nearest TUREF 3° zone in Türkiye, local UTM zone elsewhere)."
+            "true-scale metric CRS (nearest TUREF 3° zone in Türkiye, local UTM zone elsewhere). "
+            "Native cells are filled from the study-area polygons themselves, so scattered areas "
+            "stay at the requested resolution. If the cell budget is still exceeded the algorithm "
+            "stops, unless 'Allow coarser cells' is ticked (h3_res is then left empty)."
         )
 
     def initAlgorithm(self, config=None):  # noqa: N802
@@ -218,6 +221,10 @@ class GenerateH3GridAlgorithm(_H3ForgeAlgorithm):
         self.addParameter(QgsProcessingParameterBoolean(
             "NATIVE_H3", "Use native Uber H3 index when available", defaultValue=True
         ))
+        self.addParameter(QgsProcessingParameterBoolean(
+            "ALLOW_COARSE", "Allow coarser cells when the area exceeds the cell budget",
+            defaultValue=False,
+        ))
         self.addParameter(QgsProcessingParameterFeatureSink("OUTPUT", "H3 grid"))
 
     def processAlgorithm(self, parameters, context, feedback):  # noqa: N802
@@ -227,6 +234,7 @@ class GenerateH3GridAlgorithm(_H3ForgeAlgorithm):
         res = RESOLUTIONS[self.parameterAsEnum(parameters, "RESOLUTION", context)]
         coverage = COVERAGE_MODES[self.parameterAsEnum(parameters, "COVERAGE", context)][0]
         native = self.parameterAsBool(parameters, "NATIVE_H3", context)
+        allow_coarse = self.parameterAsBool(parameters, "ALLOW_COARSE", context)
 
         boundary = self._materialize(source, feedback)
         feedback.pushInfo(f"Building H3 grid at resolution {res} ({coverage})...")
@@ -242,11 +250,13 @@ class GenerateH3GridAlgorithm(_H3ForgeAlgorithm):
         engine = grid.customProperty("h3forge/engine", "")
         feedback.pushInfo(f"{grid.featureCount():,} hexagons generated ({engine}).")
         if grid.customProperty("h3forge/coarsened", False):
-            feedback.reportError(
-                "Extent exceeded the cell budget; hexagons were coarsened. Use a coarser "
-                "resolution or a smaller study area for true resolution cells.",
-                fatalError=False,
-            )
+            mean_ha = float(grid.customProperty("h3forge/mean_area_m2", 0.0)) / 10_000.0
+            msg = (f"The study area exceeds the cell budget at resolution {res}: cells were "
+                   f"enlarged to {mean_ha:.2f} ha (h3_res left empty). Use a coarser resolution "
+                   "or a smaller study area for true resolution cells.")
+            if not allow_coarse:
+                raise QgsProcessingException(msg + " Enable 'Allow coarser cells' to accept them.")
+            feedback.reportError(msg, fatalError=False)
         return {"OUTPUT": self._write_sink(parameters, context, grid, feedback)}
 
 

@@ -54,6 +54,17 @@ risk = processing.run("zero2h3forge:runmodel", {
 
 `RESOLUTION` is an index into resolutions 6–12 (4 = Res 10). Installing the `h3` Python package enables authentic Uber H3 cell IDs; without it an H3-scale metric grid is used.
 
+If a study area needs more cells than the budget allows, `h3grid` stops with an error; set `"ALLOW_COARSE": True` to accept enlarged cells instead (their `h3_res` is left empty).
+
+In a standalone (headless) script, keep a reference to the provider, or Python collects it and `processing.run` fails with *Error creating algorithm from createInstance()*:
+
+```python
+from zero2h3forge.h3forge_processing import H3ForgeProvider
+
+PROVIDER = H3ForgeProvider()
+QgsApplication.processingRegistry().addProvider(PROVIDER)
+```
+
 ## Testing
 
 ```bash

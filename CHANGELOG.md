@@ -5,6 +5,16 @@ All notable changes to **02H3Forge - H3 Hexagonal Risk, Vulnerability and Suitab
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-06
+
+### Fixed
+- **Raster zonal statistics found no pixels.** The private memory layer was created without `crs=` in its URI, so its provider stayed in EPSG:4326 and `QgsZonalStatistics` silently matched nothing; every hexagon fell back to the 13-point stencil (a `sum` of 13 per cell, e.g. 6.5× too low at Res 8 with a 100 m raster). The layer is now built with the hexagon CRS, failures and the share of stencil cells are written to the run log, and a stencil `sum` is scaled by cell area / pixel area.
+- **Scattered study areas lost native H3 cells.** Native candidates were generated for the boundary's bounding box, which for a dispersed area exceeds the cell budget and dropped to an enlarged metric grid. Cells are now filled from the boundary polygons themselves, so the budget counts real cells.
+- Enlarged (coarsened) cells no longer claim the requested resolution: `h3_res` is left empty. `zero2h3forge:h3grid` stops in that case unless the new `ALLOW_COARSE` parameter is set.
+
+### Added
+- `tests/smoke_raster_grid.py`: value checks on a constant raster (pixel-count sums, mean = 1, sub-pixel area shares), a scattered-area grid test and the coarsening guard.
+
 ## [0.3.0] - 2026-11-04
 
 A criterion-centric, hierarchical redesign of the studio. Existing v0.2 layers keep working: their `norm_*` fields are registered as criteria automatically, and v0.2 scenario files load as models.

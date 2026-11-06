@@ -327,15 +327,23 @@ def raster_zonal_array(
     band: int = 1,
     default: float = 0.0,
     cancelled: CancelFn = None,
+    log: Optional[Callable[[str], None]] = None,
 ) -> np.ndarray:
     """Exact pixel-based zonal statistic per hexagon (QgsZonalStatistics).
 
     Runs on a private memory layer and a provider clone, so it is safe in a
-    worker thread. Hexagons that cover no pixel fall back to a 13-point
-    sampling stencil.
+    worker thread. Hexagons that contain no pixel centre (cells smaller than a
+    pixel, or outside the raster) fall back to a 13-point sampling stencil;
+    for ``sum`` the stencil mean is scaled by cell area / pixel area. The
+    number of fallback cells is reported through ``log``.
     """
     from qgis.analysis import QgsZonalStatistics
-    from qgis.core import QgsCoordinateTransform, QgsFeature, QgsPointXY, QgsProject, QgsVectorLayer
+    from qgis.core import (
+        QgsCoordinateTransform, QgsFeature, QgsFields, QgsGeometry,
+        QgsMemoryProviderUtils, QgsPointXY, QgsProject, QgsWkbTypes,
+    )
+
+    from .h3_grid_engine import _make_qgs_field
 
     n = len(hex_geoms)
     out = np.full(n, np.nan, dtype=np.float64)
@@ -345,9 +353,13 @@ def raster_zonal_array(
         "std": QgsZonalStatistics.StDev, "range": QgsZonalStatistics.Range,
         "sum": QgsZonalStatistics.Sum,
     }
-    with suppress(Exception):
-        tmp = QgsVectorLayer("Polygon?field=i:integer", "h3forge_zs", "memory")
-        tmp.setCrs(hex_crs)
+    try:
+        # The provider CRS must be the hexagon CRS: a "Polygon?..." URI without
+        # crs= leaves the memory provider in EPSG:4326 even after setCrs(), and
+        # QgsZonalStatistics then finds no pixels at all (silently).
+        fields = QgsFields()
+        fields.append(_make_qgs_field("i", "int"))
+        tmp = QgsMemoryProviderUtils.createMemoryLayer("h3forge_zs", fields, QgsWkbTypes.Polygon, hex_crs)
         feats = []
         for i, g in enumerate(hex_geoms):
             f = QgsFeature(tmp.fields())
@@ -359,7 +371,8 @@ def raster_zonal_array(
         zs = QgsZonalStatistics(
             tmp, src.provider, src.crs, src.pixel_x, src.pixel_y, "zs_", int(band), stats
         )
-        if zs.calculateStatistics(None) == 0:
+        rc = zs.calculateStatistics(None)
+        if rc == 0:
             names = [f.name() for f in tmp.fields()]
             i_cnt = names.index("zs_count") if "zs_count" in names else -1
             i_val = next((k for k, nm in enumerate(names) if nm.startswith("zs_") and k != i_cnt), -1)
@@ -368,6 +381,11 @@ def raster_zonal_array(
                 with suppress(TypeError, ValueError):
                     if i_cnt >= 0 and float(a[i_cnt]) > 0 and a[i_val] is not None:
                         out[int(a[0])] = float(a[i_val])
+        elif log is not None:
+            log(f"zonal statistics on '{src.name}' returned code {rc}; using point sampling")
+    except Exception as exc:  # noqa: BLE001 - reported, then point sampling takes over
+        if log is not None:
+            log(f"zonal statistics on '{src.name}' failed ({exc}); using point sampling")
 
     missing = np.flatnonzero(~np.isfinite(out))
     if missing.size:
@@ -375,6 +393,7 @@ def raster_zonal_array(
         if hex_crs != src.crs:
             tr = QgsCoordinateTransform(hex_crs, src.crs, QgsProject.instance())
         ext = src.extent
+        pixel_area = abs(float(src.pixel_x) * float(src.pixel_y))
         for count, i in enumerate(missing):
             _tick(count, missing.size, None, cancelled)
             hg = hex_geoms[i]
@@ -395,5 +414,20 @@ def raster_zonal_array(
                 val, ok = src.provider.sample(rp, int(band))
                 if ok and val is not None and np.isfinite(val):
                     samples.append(float(val))
-            out[i] = stat(samples, method, default)
+            if method == "sum":
+                # A stencil total counts 13 points, not pixels: scale the mean by
+                # the share of the cell area each pixel represents.
+                if samples and pixel_area > 0:
+                    cell = QgsGeometry(hg)
+                    if tr is not None:
+                        with suppress(Exception):
+                            cell.transform(tr)
+                    out[i] = float(np.mean(samples)) * cell.area() / pixel_area
+                else:
+                    out[i] = float(default)
+            else:
+                out[i] = stat(samples, method, default)
+        if log is not None:
+            log(f"zonal statistics on '{src.name}': {missing.size:,} of {n:,} hexagons "
+                f"({100.0 * missing.size / max(1, n):.1f}%) used point sampling")
     return np.where(np.isfinite(out), out, float(default))

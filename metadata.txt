@@ -4,7 +4,7 @@ qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 supportsQt6=True
 description=Uber H3 hexagonal grid-based multi-criteria decision analysis (MCDA), graduated buffer scoring, spatial data fusion, and composite risk, hazard, vulnerability, susceptibility, and suitability mapping studio.
-version=0.3.0
+version=0.3.1
 author=Geophilo
 email=yusuf.eminoglu@deu.edu.tr
 

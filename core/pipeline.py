@@ -442,7 +442,7 @@ def compute_run(inputs: RunInputs, progress: ProgressFn = None, cancelled: Cance
         if c.source.kind == "raster":
             src = inputs.rasters[_source_key(c.source)]
             arr = raster_zonal_array(snap.geoms, snap.crs, src, c.source.method or "mean",
-                                     int(c.source.band or 1), cancelled=cancelled)
+                                     int(c.source.band or 1), cancelled=cancelled, log=res.log.append)
         elif c.source.kind == "distance":
             src = inputs.vectors[_source_key(c.source)]
             arr = distance_array(snap.geoms, src.geoms, _sub(lo, hi), cancelled)
